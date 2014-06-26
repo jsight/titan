@@ -137,6 +137,28 @@ public class LuceneIndex implements IndexProvider {
         Preconditions.checkArgument(map==Mapping.DEFAULT || AttributeUtil.isString(dataType),
                 "Specified illegal mapping [%s] for data type [%s]",map,dataType);    }
 
+    private ScoreDoc[] filterToExactMatches(IndexSearcher searcher, ScoreDoc[] scoreDocs, String docid) throws IOException {
+        if (scoreDocs.length == 0) {
+            return new ScoreDoc[0];
+        } else if (scoreDocs.length == 1) {
+            Document doc = searcher.doc(scoreDocs[0].doc);
+            if (docid.equals(doc.getField(DOCID).stringValue())) {
+                return scoreDocs;
+            } else {
+                return new ScoreDoc[0];
+            }
+        } else {
+            List<ScoreDoc> results = new ArrayList<ScoreDoc>();
+            for (ScoreDoc scoreDoc : scoreDocs) {
+                Document doc = searcher.doc(scoreDoc.doc);
+                if (docid.equals(doc.getField(DOCID).stringValue())) {
+                    results.add(scoreDoc);
+                }
+            }
+            return results.toArray(new ScoreDoc[results.size()]);
+        }
+    }
+    
     @Override
     public void mutate(Map<String, Map<String, IndexMutation>> mutations, KeyInformation.IndexRetriever informations, TransactionHandle tx) throws StorageException {
         Transaction ltx = (Transaction) tx;
@@ -159,19 +181,20 @@ public class LuceneIndex implements IndexProvider {
                     }
 
                     Document doc = null;
-                    TopDocs hits = searcher.search(new TermQuery(docTerm), 10);
+                    TopDocs searchHits = searcher.search(new TermQuery(docTerm), 10);
+                    ScoreDoc[] scoreDocs = filterToExactMatches(searcher, searchHits.scoreDocs, docid);
                     Map<String, Shape> geofields = Maps.newHashMap();
 
-                    if (hits.scoreDocs.length == 0) {
+                    if (scoreDocs.length == 0) {
                         log.trace("Creating new document for [{}]", docid);
                         doc = new Document();
                         Field docidField = new StringField(DOCID, docid, Field.Store.YES);
                         doc.add(docidField);
-                    } else if (hits.scoreDocs.length > 1) {
+                    } else if (scoreDocs.length > 1) {
                         throw new IllegalArgumentException("More than one document found for document id: " + docid);
                     } else {
                         log.trace("Updating existing document for [{}]", docid);
-                        int docId = hits.scoreDocs[0].doc;
+                        int docId = scoreDocs[0].doc;
                         //retrieve the old document
                         doc = searcher.doc(docId);
                         for (IndexableField field : doc.getFields()) {
